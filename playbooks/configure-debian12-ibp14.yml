@@ -1,0 +1,216 @@
+---
+- name: Setup Debian 12 on IBP14
+  hosts: localhost
+  become: yes
+  become_method: sudo
+  
+  vars_prompt:
+    - name: main_user
+      prompt: What is the main user's username?
+      private: false       
+      
+  tasks:
+  
+    - name: Add user to sudoers
+      block:
+        - name: Add main_user to sudo group
+          command: "usermod -aG sudo {{ main_user }}"
+        - name: Add main_user to sudoers and let main_user run the fusermount -u command without password for clone mounts to work nicely
+          lineinfile:
+            dest: /etc/sudoers
+            state: present
+            regexp: "^root    ALL=(ALL:ALL) ALL"
+            line: "root    ALL=(ALL:ALL) ALL\n{{ main_user }}	ALL=(ALL:ALL) ALL\n{{ main_user }}	ALL=(ALL) NOPASSWD: /bin/fusermount -u"
+            validate: "visudo -cf %s"
+            
+    - name: Update and upgrade apt
+      apt:
+        update_cache: yes
+        upgrade: yes
+    
+    - name: Purge apt packages
+      apt:
+        name: "{{ item }}"
+        state: absent
+        purge: yes
+      loop:
+        - gnome-2048
+        - gnome-suduko
+        - gnome-chess
+        - gnome-mahjongg
+        - gnome-maps
+        - gnome-mines
+        - gnome-weather
+        - gnome-tetravex
+        - gnome-taquin
+        - gnome-sound-recorder
+        - gnome-robots
+        - gnome-nibbles
+        - gnome-klotski
+        - gnome-music
+        - aisleriot
+        - cheese
+        - simple-scan
+        - five-or-more
+        - four-in-a-row
+        - hitori
+        - lightsoff
+        - quadrapassel
+        - gnome-games
+        - shotwell
+        - totem
+        - totem-plugins
+        - transmission-gtk
+        - *firefox*
+        - libreoffice*
+        - tali
+    
+    - name: Install apt packages
+      apt:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - gnome-boxes
+        - pdfarranger
+        - solaar
+        - vlc
+        - chromium
+        - cmatrix
+        - kolourpaint
+        - flatpak
+        - gnome-software-plugin-flatpak
+        - htop
+        - rclone
+        - keepassxc
+        - curl
+        - nodejs
+        - npm
+        - evolution-ews
+        - libvirt-clients
+
+    - name: Install DEB packages
+      ansible.builtin.apt:
+        deb: "{{ item }}"
+      loop:
+        - https://links.fortinet.com/forticlient/deb/vpnagent
+        - https://deb.tuxedocomputers.com/ubuntu/pool/main/t/tuxedo-drivers/tuxedo-drivers_4.8.0_all.deb
+        - https://deb.tuxedocomputers.com/ubuntu/pool/main/t/tuxedo-control-center/tuxedo-control-center_2.1.13-4_amd64.deb
+        - https://github.com/TheAssassin/AppImageLauncher/releases/download/continuous/appimagelauncher_2.2.0-gha111.d9d4c73+bionic_amd64.deb
+        - https://code.visualstudio.com/sha/download?build=stable&os=linux-deb-x64
+        - https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/microsoft-edge-stable_129.0.2792.65-1_amd64.deb?brand=M102
+    
+    - name: Add the flathub flatpak repository remote to the user installation
+      community.general.flatpak_remote:
+        name: flathub
+        state: present
+        flatpakrepo_url: https://dl.flathub.org/repo/flathub.flatpakrepo
+    
+    - name: Install flatpak applications
+      community.general.flatpak:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - org.qbittorrent.qBittorrent
+        - io.dbeaver.DBeaverCommunity
+        - com.jgraph.drawio.desktop
+        - com.github.IsmaelMartinez.teams_for_linux
+        - org.telegram.desktop
+        - com.skype.Client
+        - com.slack.Slack
+        - org.remmina.Remmina
+        - rest.insomnia.Insomnia
+        - us.zoom.Zoom
+        - fr.handbrake.ghb
+        - org.kde.ghostwriter
+        - org.onlyoffice.desktopeditors
+
+    - name: Install typescript
+      command: "npm install -g typescript"
+          
+    - name: Install docker and docker-compose
+      block:
+        - name: Download convenience script
+          command: "curl -fsSL https://get.docker.com -o get-docker.sh"
+        - name: Execute convenience script
+          command: "sh get-docker.sh"
+        - name: Delete convenience script
+          command: "rm get-docker.sh"
+          
+    - name: Create folder to place rclone.conf inside
+      become_user: "{{ main_user }}"
+      command: "mkdir -p $HOME/.config/rclone"
+          
+    - name: Add more conf files
+      command: "{{ item }}"
+      become: true
+      become_user: "{{ main_user }}"
+      loop:
+        - "cp ../secrets/.bashrc $HOME/.bashrc"
+        - "cp ../secrets/.nanorc $HOME/.nanorc"
+        - "cp ../secrets/rclone.conf $HOME/.config/rclone/rclone.conf"
+      
+    - name: Enable fractional scaling
+      become: true
+      become_user: "{{ main_user }}"
+      command: gsettings set org.gnome.mutter experimental-features "['scale-monitor-framebuffer']"
+      
+    - name: Setup wireguard connection
+      block:
+        - name: Setup vpn connection
+          command: "nmcli connection import type wireguard file ../secrets/home.conf"
+        - name: Disable vpn autostart
+          command: "nmcli connection modify home connection.autoconnect no"
+          
+    - name: Create rclone service to mount onedrive cloud accounts
+      block:
+        - name: Create necessary folder
+          become_user: "{{ main_user }}"
+          command: "{{ item }}"
+          loop:
+            - "mkdir -p $HOME/Cloud/papas84"
+            - "mkdir -p $HOME/Cloud/pkpapas"
+            - "mkdir -p $HOME/Cloud/inlecom"
+        - name: Plant the service
+          command: "cp ../secrets/rclone-mount-onedrive-all.service /etc/systemd/system/rclone-mount-onedrive-all.service"
+        - name: Reload systemd
+          command: "systemctl daemon-reload"
+        - name: Enable the service
+          command: "systemctl enable rclone-mount-onedrive-all.service"
+        - name: Start the service
+          command: "systemctl start rclone-mount-onedrive-all.service"
+          
+    - name: Git clone Pop-Shell
+      become_user: "{{ main_user }}"
+      block:
+        - name: Ensure folder where repo will be placed is empty
+          command:
+            chdir: "/home/{{ main_user }}/Desktop"
+            cmd: "rm -rf ./pop"
+        - name: Git-clone Pop-Shell
+          command: 
+            chdir: "/home/{{ main_user }}/Desktop"
+            cmd: "git clone https://github.com/pop-os/shell.git pop"
+        - name: Switch to correct branch for Debian 12 (Gnome 43)
+          command: 
+            chdir: "/home/{{ main_user }}/Desktop/pop"
+            cmd: "git checkout master_jammy"
+
+    - name: Change GRUB_TIMEOUT from 5 to 0
+      lineinfile:
+        path: /etc/default/grub
+        regexp: '^GRUB_TIMEOUT=5'
+        line: 'GRUB_TIMEOUT=0'
+    - name: Update Grub
+      command: "update-grub"
+
+    - name: Display post install message
+      debug:
+        msg: [
+          "Things left to do:",
+          "  1. Download and install Clickup app image. AppImageLauncher should already be installed.",
+          "  2. Download and install NordVPN.",
+          "  3. cd into ~/Desktop/pop and make local-install, then delete pop folder",
+          "  4. Install all the gnome extensions, and if up to it try and fix the ansible way of doing this!",
+          "  4. Restart"
+        ]
+
